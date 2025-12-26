@@ -31,6 +31,11 @@ Key options:
 
 The script writes both the raw tables (with `politician_id` and, when available, `politician_name`) and an aggregated CSV showing the count of trades for each owner/transaction combination, making it easy to share or further analyze the results.
 
+Notes on discovery reliability:
+
+- The scraper now parses the Capitol Trades Next.js data blob (the `__NEXT_DATA__` script tag) to pull `politicianId` and names directly from the page payload. If that blob is missing, it falls back to regex extraction of `politicianId` values in the raw HTML.
+- If no politicians are discovered for a chamber, increase `--list-max-pages` or verify network access to https://www.capitoltrades.com/.
+
 ### Google Colab usage
 
 Open `pelosi_trades_colab.ipynb` in Google Colab for a ready-to-run workflow that installs dependencies, imports the scraper, pulls all Senate and House trades, and shows both the raw and aggregated views. If you prefer a quick start directly in a Colab cell, run:

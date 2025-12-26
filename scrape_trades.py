@@ -124,28 +124,58 @@ def discover_politicians(
     ids: list[tuple[str, Optional[str]]] = []
     seen: set[str] = set()
     chamber = chamber.lower()
+
+    def _walk(obj: object) -> None:
+        if isinstance(obj, dict):
+            # JSON payloads often store both the ID and the name on the same object.
+            if "politicianId" in obj:
+                pid = str(obj.get("politicianId"))
+                if pid and pid not in seen:
+                    name = obj.get("fullName") or obj.get("name") or obj.get("displayName")
+                    seen.add(pid)
+                    ids.append((pid, name if name else None))
+            for value in obj.values():
+                _walk(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                _walk(item)
+
     for page in range(1, max_pages + 1):
         url = f"{base_url}/politicians?chamber={chamber}&page={page}&pageSize={page_size}"
         html = fetch_html(url, verify_ssl=verify_ssl)
         soup = BeautifulSoup(html, "lxml")
-        anchors = soup.find_all("a", href=True)
+
+        # Primary path: parse the Next.js data blob to pull politicianId/name pairs.
+        blob = soup.find("script", id="__NEXT_DATA__")
         found_this_page = 0
-        for anchor in anchors:
-            href = anchor.get("href", "")
-            match = re.search(r"politician=([A-Z0-9]+)", href)
-            if not match:
-                continue
-            politician_id = match.group(1)
-            if politician_id in seen:
-                continue
-            seen.add(politician_id)
-            name = anchor.get_text(strip=True) or None
-            ids.append((politician_id, name))
-            found_this_page += 1
+        if blob and blob.string:
+            try:
+                import json
+
+                data = json.loads(blob.string)
+                before = len(ids)
+                _walk(data)
+                found_this_page = len(ids) - before
+            except Exception:
+                # Fall back to regex extraction below
+                pass
+
+        # Fallback: regex IDs in the raw HTML (works even if the name can't be paired).
         if found_this_page == 0:
-            # Assume we reached the end of paginated results.
+            for match in re.finditer(r"politicianId\":\"([A-Z0-9]+)\"", html):
+                pid = match.group(1)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                ids.append((pid, None))
+                found_this_page += 1
+
+        # If neither strategy worked, stop early to avoid hammering empty pages.
+        if found_this_page == 0:
             break
+
         time.sleep(0.2)
+
     if not ids:
         raise TradeScraperError(
             f"No politicians discovered for chamber '{chamber}'. Try increasing list_max_pages or check connectivity."
