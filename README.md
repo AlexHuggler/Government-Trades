@@ -33,8 +33,8 @@ The script writes both the raw tables (with `politician_id` and, when available,
 
 Notes on discovery reliability:
 
-- The scraper now parses the Capitol Trades Next.js data blob (the `__NEXT_DATA__` script tag) to pull `politicianId` and names directly from the page payload. If that blob is missing, it falls back to regex extraction of `politicianId` values in the raw HTML.
-- If no politicians are discovered for a chamber, increase `--list-max-pages` or verify network access to https://www.capitoltrades.com/.
+- The scraper now parses the Capitol Trades Next.js data blob (the `__NEXT_DATA__` script tag) to pull `politicianId` and names directly from the page payload. If that blob is missing, it falls back to anchor links on the listing page and then regex extraction of `politicianId` values in the raw HTML.
+- If no politicians are discovered for a chamber, increase `--list-max-pages`, or provide explicit IDs via `--politician-id` when running locally, or verify network access to https://www.capitoltrades.com/.
 
 ### Google Colab usage
 

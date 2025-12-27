@@ -157,8 +157,25 @@ def discover_politicians(
                 _walk(data)
                 found_this_page = len(ids) - before
             except Exception:
-                # Fall back to regex extraction below
+                # Fall back to regex/anchor extraction below
                 pass
+
+        # Secondary path: harvest IDs/names from anchor links on the listing page.
+        if found_this_page == 0:
+            for anchor in soup.find_all("a", href=True):
+                href = anchor["href"]
+                text = anchor.get_text(strip=True)
+                match = re.search(r"/politician/([A-Z0-9]+)", href) or re.search(
+                    r"politician=([A-Z0-9]+)", href
+                )
+                if not match:
+                    continue
+                pid = match.group(1)
+                if pid in seen:
+                    continue
+                seen.add(pid)
+                ids.append((pid, text or None))
+                found_this_page += 1
 
         # Fallback: regex IDs in the raw HTML (works even if the name can't be paired).
         if found_this_page == 0:
@@ -170,7 +187,7 @@ def discover_politicians(
                 ids.append((pid, None))
                 found_this_page += 1
 
-        # If neither strategy worked, stop early to avoid hammering empty pages.
+        # If nothing was detected, stop early to avoid hammering empty pages.
         if found_this_page == 0:
             break
 
