@@ -25,6 +25,9 @@ Key options:
 - `--aggregated-csv`: path for saving the aggregated summary (default: `all_trades_aggregated.csv`).
 - `--max-pages`: maximum paginated trade pages to crawl (default: 10).
 - `--list-max-pages`: how many politician listing pages to crawl (default: 5).
+- `--open-browser`: open your default browser to the first listing page plus a handful of sample trade pages for visual
+  validation of what will be scraped (combine with `--preview-count` to control how many samples are opened).
+- `--preview-count`: how many sample trade pages to open when using `--open-browser` (default: 1).
 - `--skip-ssl-verify`: bypass SSL verification when fetching pages.
 - `--base-url`: override the default Capitol Trades base URL if needed.
 

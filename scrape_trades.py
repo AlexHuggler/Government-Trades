@@ -35,6 +35,7 @@ import csv
 import re
 import sys
 import time
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -200,6 +201,29 @@ def discover_politicians(
     return ids
 
 
+def open_validation_pages(
+    *,
+    base_url: str,
+    politician_ids: list[str],
+    list_page_size: int,
+    trades_page_size: int,
+    preview_count: int,
+) -> None:
+    """Open a few listing/trade pages in the default browser for visual validation."""
+
+    preview_count = max(preview_count, 0)
+    urls: list[str] = [f"{base_url}/politicians?page=1&pageSize={list_page_size}"]
+    for pid in politician_ids[:preview_count]:
+        urls.append(f"{base_url}/trades?politician={pid}&page=1&pageSize={trades_page_size}")
+
+    for url in urls:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            # Browser launching is best-effort; do not crash scraping on failure.
+            pass
+
+
 def scrape_politician_trades(
     politician_id: str,
     *,
@@ -243,6 +267,8 @@ def scrape_all_politicians(
     list_max_pages: int = 5,
     verify_ssl: bool = True,
     explicit_ids: Optional[list[str]] = None,
+    open_browser: bool = False,
+    preview_count: int = 1,
 ) -> pd.DataFrame:
     """Discover politicians and scrape all of their trades."""
 
@@ -257,6 +283,15 @@ def scrape_all_politicians(
                 max_pages=list_max_pages,
                 verify_ssl=verify_ssl,
             )
+        )
+
+    if open_browser and discovered:
+        open_validation_pages(
+            base_url=base_url,
+            politician_ids=[pid for pid, _ in discovered],
+            list_page_size=list_page_size,
+            trades_page_size=page_size,
+            preview_count=preview_count,
         )
 
     frames: list[pd.DataFrame] = []
@@ -316,6 +351,17 @@ def parse_args() -> argparse.Namespace:
         action="append",
         help="Explicit politician IDs to scrape instead of auto-discovery (can be repeated).",
     )
+    parser.add_argument(
+        "--open-browser",
+        action="store_true",
+        help="Open browser tabs for the first listing page and sample trade pages to visually validate scraping targets.",
+    )
+    parser.add_argument(
+        "--preview-count",
+        type=int,
+        default=1,
+        help="How many politicians to preview when opening browser tabs (only used with --open-browser).",
+    )
     return parser.parse_args()
 
 
@@ -332,6 +378,8 @@ def main() -> int:
             list_max_pages=args.list_max_pages,
             explicit_ids=args.politician_id,
             verify_ssl=not args.skip_ssl_verify,
+            open_browser=args.open_browser,
+            preview_count=args.preview_count,
         )
         aggregated = aggregate_trades(selected_table, hints)
         save_dataframe(aggregated, args.aggregated_csv)
