@@ -1,11 +1,11 @@
 """
-Scrape and aggregate Capitol Trades disclosures for all senators and House
-members.
+Scrape and aggregate Capitol Trades disclosures for all politicians listed on
+Capitol Trades.
 
 Highlights
 ----------
 * Discovers politician IDs from the Capitol Trades "Politicians" listing pages
-  (Senate and House) and scrapes each member's paginated trade tables.
+  and scrapes each member's paginated trade tables.
 * Stitches all trades into a single raw dataset plus a shareable aggregation by
   owner (filer, spouse, family) and buy/sell action.
 * Exposes a simple CLI plus importable helpers that work well in Google Colab
@@ -13,8 +13,8 @@ Highlights
 
 Examples
 --------
-* Crawl the first 3 listing pages for each chamber, fetch up to 3 trade pages
-  per politician, and save CSVs:
+* Crawl the first 3 listing pages, fetch up to 3 trade pages per politician,
+  and save CSVs:
 
     python scrape_trades.py --list-max-pages 3 --max-pages 3 --raw-csv all_raw.csv --aggregated-csv all_aggregated.csv
 
@@ -117,13 +117,13 @@ def aggregate_trades(table: pd.DataFrame, hints: ColumnHints) -> pd.DataFrame:
 
 
 def discover_politicians(
-    *, base_url: str, chamber: str, page_size: int = 96, max_pages: int = 10, verify_ssl: bool = True
+    *, base_url: str, chamber: Optional[str] = None, page_size: int = 96, max_pages: int = 10, verify_ssl: bool = True
 ) -> list[tuple[str, Optional[str]]]:
-    """Return a list of ``(politician_id, politician_name)`` tuples for a chamber."""
+    """Return a list of ``(politician_id, politician_name)`` tuples."""
 
     ids: list[tuple[str, Optional[str]]] = []
     seen: set[str] = set()
-    chamber = chamber.lower()
+    chamber = chamber.lower() if chamber else None
 
     def _walk(obj: object) -> None:
         if isinstance(obj, dict):
@@ -141,7 +141,9 @@ def discover_politicians(
                 _walk(item)
 
     for page in range(1, max_pages + 1):
-        url = f"{base_url}/politicians?chamber={chamber}&page={page}&pageSize={page_size}"
+        url = f"{base_url}/politicians?page={page}&pageSize={page_size}"
+        if chamber:
+            url += f"&chamber={chamber}"
         html = fetch_html(url, verify_ssl=verify_ssl)
         soup = BeautifulSoup(html, "lxml")
 
@@ -194,9 +196,7 @@ def discover_politicians(
         time.sleep(0.2)
 
     if not ids:
-        raise TradeScraperError(
-            f"No politicians discovered for chamber '{chamber}'. Try increasing list_max_pages or check connectivity."
-        )
+        raise TradeScraperError("No politicians discovered. Try increasing list_max_pages or check connectivity.")
     return ids
 
 
@@ -241,26 +241,23 @@ def scrape_all_politicians(
     max_pages: int = 10,
     list_page_size: int = 96,
     list_max_pages: int = 5,
-    chambers: Iterable[str] = ("senate", "house"),
     verify_ssl: bool = True,
     explicit_ids: Optional[list[str]] = None,
 ) -> pd.DataFrame:
-    """Discover politicians in the Senate/House and scrape all of their trades."""
+    """Discover politicians and scrape all of their trades."""
 
     discovered: list[tuple[str, Optional[str]]] = []
     if explicit_ids:
         discovered = [(pid, None) for pid in explicit_ids]
     else:
-        for chamber in chambers:
-            discovered.extend(
-                discover_politicians(
-                    base_url=base_url,
-                    chamber=chamber,
-                    page_size=list_page_size,
-                    max_pages=list_max_pages,
-                    verify_ssl=verify_ssl,
-                )
+        discovered.extend(
+            discover_politicians(
+                base_url=base_url,
+                page_size=list_page_size,
+                max_pages=list_max_pages,
+                verify_ssl=verify_ssl,
             )
+        )
 
     frames: list[pd.DataFrame] = []
     for pid, name in discovered:
@@ -292,7 +289,7 @@ def save_dataframe(df: pd.DataFrame, path: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Scrape and aggregate trade disclosure tables for all senators and House members from Capitol Trades."
+        description="Scrape and aggregate trade disclosure tables for all politicians from Capitol Trades."
     )
     parser.add_argument("--owner-column", help="Optional explicit owner column name.")
     parser.add_argument("--transaction-column", help="Optional explicit transaction column name.")
@@ -313,13 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--list-page-size", type=int, default=96, help="How many politicians to request per listing page."
     )
-    parser.add_argument("--list-max-pages", type=int, default=5, help="Maximum politician listing pages per chamber.")
-    parser.add_argument(
-        "--chambers",
-        nargs="+",
-        default=["senate", "house"],
-        help="Which chambers to scrape (choose any of: senate house).",
-    )
+    parser.add_argument("--list-max-pages", type=int, default=5, help="Maximum politician listing pages to crawl.")
     parser.add_argument(
         "--politician-id",
         action="append",
@@ -339,7 +330,6 @@ def main() -> int:
             max_pages=args.max_pages,
             list_page_size=args.list_page_size,
             list_max_pages=args.list_max_pages,
-            chambers=args.chambers,
             explicit_ids=args.politician_id,
             verify_ssl=not args.skip_ssl_verify,
         )
