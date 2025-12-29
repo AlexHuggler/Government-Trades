@@ -1,29 +1,29 @@
 """
-Scrape and aggregate Nancy Pelosi's trade disclosures from Capitol Trades.
+Scrape, clean, and aggregate Capitol Trades disclosures for any politician.
 
 Highlights
 ----------
-* Purpose-built for the Capitol Trades listing of Representative Nancy Pelosi
-  (ID ``P000197``).
-* Crawls multiple paginated trade pages, stitches them together, and produces a
-  shareable aggregation by owner (filer, spouse, family) and buy/sell action.
+* Discovers politicians from the Capitol Trades directory and scrapes each
+  profile's paginated trade tables.
+* Produces both a cleaned, shareable dataset and an aggregated summary by owner
+  (filer, spouse, family) and buy/sell action.
 * Exposes a simple CLI plus importable helpers that work well in Google Colab
   notebooks.
 
 Examples
 --------
-* Crawl the first 5 pages of Pelosi trades and save CSVs:
+* Crawl the first 5 pages of each politician's trades and save CSVs:
 
-    python scrape_trades.py --max-pages 5 --raw-csv pelosi_raw.csv --aggregated-csv pelosi_aggregated.csv
+    python scrape_trades.py --max-pages 5 --raw-csv trades_raw.csv --aggregated-csv trades_aggregated.csv
 
 * From a notebook, import and run:
 
-    from scrape_trades import scrape_pelosi_trades, aggregate_trades, ColumnHints
-    raw = scrape_pelosi_trades(max_pages=5)
+    from scrape_trades import scrape_politician_trades, aggregate_trades, ColumnHints
+    raw = scrape_politician_trades(politician_id="P000197", max_pages=5)
     summary = aggregate_trades(raw, ColumnHints(transaction=None, owner=None))
     display(summary)
 
-The script writes both the raw table (concatenated across pages) and an
+The script writes both the cleaned table (concatenated across pages) and an
 aggregated summary to CSV files for easy sharing.
 """
 from __future__ import annotations
@@ -38,6 +38,8 @@ from typing import Iterable, Optional
 
 import pandas as pd
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 @dataclass
@@ -52,30 +54,60 @@ class TradeScraperError(Exception):
 
 from bs4 import BeautifulSoup
 
-def fetch_html(url: str, verify_ssl: bool = True) -> str:
-    # Added a user-agent to mimic a real browser, which helps with large requests
+def _requests_session(retries: int, backoff: float) -> requests.Session:
+    retry_config = Retry(
+        total=retries,
+        backoff_factor=backoff,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=["GET"],
+    )
+    adapter = HTTPAdapter(max_retries=retry_config)
+    session = requests.Session()
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def fetch_html(
+    url: str,
+    verify_ssl: bool = True,
+    *,
+    timeout: float = 15.0,
+    retries: int = 3,
+    backoff: float = 0.5,
+) -> str:
+    """Fetch a URL with a browser-like user agent, retries, and timeout."""
+
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     }
-    response = requests.get(url, headers=headers, verify=verify_ssl)
+    session = _requests_session(retries=retries, backoff=backoff)
+    response = session.get(url, headers=headers, verify=verify_ssl, timeout=timeout)
     response.raise_for_status()
     return response.text
 
-def get_all_politicians(base_url: str = "https://www.capitoltrades.com", page_size: int = 100) -> dict[str, str]:
+
+def get_all_politicians(
+    base_url: str = "https://www.capitoltrades.com",
+    *,
+    page_size: int = 100,
+    max_pages: int = 50,
+    verify_ssl: bool = True,
+) -> dict[str, str]:
     """
     Scrapes the politicians directory by iterating through all pages.
     """
     print(f"Fetching politician directory from {base_url}...")
     politicians = {}
     page = 1
-    
+
     while True:
         # Construct URL with both page and pageSize
         directory_url = f"{base_url}/politicians?page={page}&pageSize={page_size}"
         print(f"  Fetching page {page}...", end="\r")
         
         try:
-            html = fetch_html(directory_url)
+            html = fetch_html(directory_url, verify_ssl=verify_ssl)
         except Exception as e:
             print(f"\nError fetching page {page}: {e}")
             break
@@ -98,7 +130,7 @@ def get_all_politicians(base_url: str = "https://www.capitoltrades.com", page_si
                         found_on_page += 1
         
         # BREAK CONDITION: If no new politicians found on this page, stop.
-        if found_on_page == 0:
+        if found_on_page == 0 or page >= max_pages:
             break
             
         page += 1
@@ -151,7 +183,9 @@ def aggregate_trades(table: pd.DataFrame, hints: ColumnHints) -> pd.DataFrame:
     if not owner_col:
         missing.append("owner column")
     if missing:
-        raise TradeScraperError(f"Could not locate: {', '.join(missing)}")
+        raise TradeScraperError(
+            f"Could not locate {', '.join(missing)}. Available columns: {', '.join(map(str, table.columns))}"
+        )
 
     table = table.copy()
     table[transaction_col] = table[transaction_col].apply(normalize_transaction)
@@ -163,12 +197,12 @@ def aggregate_trades(table: pd.DataFrame, hints: ColumnHints) -> pd.DataFrame:
 
 def scrape_politician_trades(
     politician_id: str, # Changed from hardcoded constant to argument
-    base_url: str = "https://www.capitoltrades.com", 
-    page_size: int = 96, 
-    max_pages: int = 10, 
+    base_url: str = "https://www.capitoltrades.com",
+    page_size: int = 96,
+    max_pages: int = 10,
     verify_ssl: bool = True ) -> pd.DataFrame:
     """Scrape paginated trade tables for a specific politician ID."""
-    
+
     frames: list[pd.DataFrame] = []
     for page in range(1, max_pages + 1):
         # Insert the dynamic ID here
@@ -199,13 +233,19 @@ def save_dataframe(df: pd.DataFrame, path: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Scrape and aggregate Nancy Pelosi's trade disclosure tables from Capitol Trades."
+        description="Scrape, clean, and aggregate trade disclosures from Capitol Trades."
     )
     parser.add_argument("--owner-column", help="Optional explicit owner column name.")
     parser.add_argument("--transaction-column", help="Optional explicit transaction column name.")
-    parser.add_argument("--raw-csv", default="pelosi_raw_trades.csv", help="Path to save the scraped table.")
+    parser.add_argument("--raw-csv", default="trades_raw.csv", help="Path to save the scraped table.")
     parser.add_argument(
-        "--aggregated-csv", default="pelosi_aggregated_trades.csv", help="Path to save the aggregated summary table."
+        "--aggregated-csv", default="trades_aggregated.csv", help="Path to save the aggregated summary table."
+    )
+    parser.add_argument(
+        "--max-politicians",
+        type=int,
+        default=None,
+        help="Limit how many politicians to scrape (default: scrape all discovered).",
     )
     parser.add_argument(
         "--skip-ssl-verify", action="store_true", help="Disable SSL verification when fetching the page."
@@ -217,6 +257,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--page-size", type=int, default=96, help="How many rows to request per page.")
     parser.add_argument("--max-pages", type=int, default=10, help="Maximum paginated pages to crawl.")
+    parser.add_argument(
+        "--max-directory-pages",
+        type=int,
+        default=50,
+        help="Maximum directory pages to crawl when discovering politicians.",
+    )
+    parser.add_argument(
+        "--skip-cleaning",
+        action="store_true",
+        help="Skip the data cleaning step before saving CSVs and aggregating.",
+    )
     return parser.parse_args()
 
 
@@ -270,18 +321,25 @@ def clean_trade_data(df):
 
 def main() -> int:
     args = parse_args()
-    
+
     # 1. Get the map of all politicians
-    # Note: You might want to add a flag like --all to trigger this
-    all_politicians = get_all_politicians(verify_ssl=not args.skip_ssl_verify)
-    
+    all_politicians = get_all_politicians(
+        base_url=args.base_url,
+        page_size=args.page_size,
+        max_pages=args.max_directory_pages,
+        verify_ssl=not args.skip_ssl_verify,
+    )
+
     all_data_frames = []
-    
-    # 2. Loop through them (Scanning the first 5 for testing)
-    # Remove [:5] to scrape everyone
-    for name, pol_id in list(all_politicians.items())[:5]: 
+
+    # 2. Loop through them (optionally limiting how many to scrape)
+    politician_items = list(all_politicians.items())
+    if args.max_politicians:
+        politician_items = politician_items[: args.max_politicians]
+
+    for name, pol_id in politician_items:
         print(f"Scraping trades for {name} ({pol_id})...")
-        
+
         df = scrape_politician_trades(
             politician_id=pol_id,
             base_url=args.base_url,
@@ -300,7 +358,10 @@ def main() -> int:
     # 3. Combine everything into one massive CSV
     if all_data_frames:
         final_df = pd.concat(all_data_frames, ignore_index=True)
-        
+
+        if not args.skip_cleaning:
+            final_df = clean_trade_data(final_df)
+
         # Aggregate
         hints = ColumnHints(transaction=args.transaction_column, owner=args.owner_column)
         aggregated = aggregate_trades(final_df, hints)
